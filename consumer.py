@@ -4,6 +4,17 @@ import time
 from datetime import datetime
 from DAG import BaseNode
 
+# Setup RabbitMQ connection
+connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
+channel = connection.channel()
+
+# Declare 'task_queue'
+channel.queue_declare(queue='task_queue', durable=True)
+
+# Setup connection to other RabbitMQ service for results
+other_connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
+other_channel = other_connection.channel()
+other_channel.queue_declare(queue='result_queue', durable=True)
 
 def callback(ch, method, properties, body):
     node_name = body.decode()
@@ -23,11 +34,6 @@ def callback(ch, method, properties, body):
         'result': result
     }
 
-    # Setup connection to other RabbitMQ service
-    other_connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
-    other_channel = other_connection.channel()
-    other_channel.queue_declare(queue='result_queue', durable=True)
-
     # Publish result to other RabbitMQ service
     other_channel.basic_publish(
         exchange='',
@@ -38,17 +44,7 @@ def callback(ch, method, properties, body):
         )
     )
 
-    other_connection.close()
-
     ch.basic_ack(delivery_tag=method.delivery_tag)
-
-
-# Setup RabbitMQ connection
-connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
-channel = connection.channel()
-
-# Declare queue
-channel.queue_declare(queue='task_queue', durable=True)
 
 # Consume messages from queue
 channel.basic_qos(prefetch_count=1)
