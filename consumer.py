@@ -1,15 +1,58 @@
 import pika
-from .node import Node
+import json
+import time
+from datetime import datetime
+from DAG import BaseNode
 
-def consume(queue):
-    connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
-    channel = connection.channel()
 
-    def callback(ch, method, properties, body):
-        node = Node(body.decode())
-        print(node.run())
-        ch.basic_ack(delivery_tag=method.delivery_tag)
+def callback(ch, method, properties, body):
+    node_name = body.decode()
+    node = BaseNode(node_name)
+    start_time = datetime.now()
+    result = node.run()
+    end_time = datetime.now()
+    elapsed_time = (end_time - start_time).total_seconds()
 
-    channel.basic_consume(queue=queue, on_message_callback=callback)
+    print(f" [x] Received {node_name}, run result: {result}, elapsed time: {elapsed_time}s")
 
-    channel.start_consuming()
+    result_dict = {
+        'name': node_name,
+        'start_time': start_time.strftime("%Y-%m-%d %H:%M:%S"),
+        'end_time': end_time.strftime("%Y-%m-%d %H:%M:%S"),
+        'elapsed_time': elapsed_time,
+        'result': result
+    }
+
+    # Setup connection to other RabbitMQ service
+    other_connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
+    other_channel = other_connection.channel()
+    other_channel.queue_declare(queue='result_queue', durable=True)
+
+    # Publish result to other RabbitMQ service
+    other_channel.basic_publish(
+        exchange='',
+        routing_key='result_queue',
+        body=json.dumps(result_dict),
+        properties=pika.BasicProperties(
+            delivery_mode=2,  # make message persistent
+        )
+    )
+
+    other_connection.close()
+
+    ch.basic_ack(delivery_tag=method.delivery_tag)
+
+
+# Setup RabbitMQ connection
+connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
+channel = connection.channel()
+
+# Declare queue
+channel.queue_declare(queue='task_queue', durable=True)
+
+# Consume messages from queue
+channel.basic_qos(prefetch_count=1)
+channel.basic_consume(queue='task_queue', on_message_callback=callback)
+
+print(' [*] Waiting for messages. To exit press CTRL+C')
+channel.start_consuming()
