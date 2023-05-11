@@ -1,6 +1,8 @@
 import time
+import aio_pika
 import pika  # RabbitMQ client library
 import json
+import queue
 
 class BaseNode:
     def __init__(self, name: str):
@@ -17,6 +19,7 @@ class BaseNode:
         time.sleep(1)
         return 1
 
+
 class DAG:
     def __init__(self):
         self.nodes = []
@@ -30,37 +33,65 @@ class DAG:
     def kahn_algorithm(self):
         # Setup RabbitMQ connection and channel
         connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
-        channel = connection.channel()
-        channel.queue_declare(queue='task_queue', durable=True)
+
+        # Declare task queue
+        task_queue = connection.channel()
+        task_queue.queue_declare(queue='task_queue', durable=True)
+
+        # Declare result queue
+        result_queue = connection.channel()
+        result_queue.queue_declare(queue='result_queue', durable=True)
 
         # List of nodes with no incoming edges
         zero_indegree = [node for node in self.nodes if node.indegree == 0]
 
-        while zero_indegree:
-            # Get node with no incoming edges
-            node = zero_indegree.pop(0)
-
-            # Run the node and push to RabbitMQ
-            # node.run()
+        for node in zero_indegree:
             message = node.name
-            channel.basic_publish(exchange='',
-                                  routing_key='task_queue',
-                                  body=message,
-                                  properties=pika.BasicProperties(
-                                      delivery_mode = 2,  # make message persistent
-                                  ))
+            task_queue.basic_publish(exchange='',
+                                     routing_key='task_queue',
+                                     body=message,
+                                     properties=pika.BasicProperties(
+                                         delivery_mode=2,  # make message persistent
+                                     ))
 
-            # Decrease indegree of neighbors
+        def callback(ch, method, properties, body):
+            result_dict = json.loads(body)
+            print(f"Received result: {result_dict}")
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            node = [node for node in self.nodes if node.name == result_dict['name']][0]
             for neighbor in node.neighbors:
                 neighbor.indegree -= 1
                 if neighbor.indegree == 0:
-                    zero_indegree.append(neighbor)
+                    message = neighbor.name
+                    task_queue.basic_publish(exchange='',
+                                             routing_key='task_queue',
+                                             body=message,
+                                             properties=pika.BasicProperties(
+                                                 delivery_mode=2,  # make message persistent
+                                             ))
+        # Consume messages from queue
+        result_queue.basic_qos(prefetch_count=1)
+        result_queue.basic_consume(queue='result_queue', on_message_callback=callback)
+        result_queue.start_consuming()
 
         # Close RabbitMQ connection
         connection.close()
 
 
+def purge_queue(queue_name):
+    connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
+    channel = connection.channel()
+
+    method_frame, header_frame, body = channel.basic_get(queue=queue_name)
+    while method_frame:
+        channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+        method_frame, header_frame, body = channel.basic_get(queue=queue_name)
+
+    connection.close()
+
 if __name__ == '__main__':
+    purge_queue('task_queue')
+    purge_queue('result_queue')
     # Create a Directed Acyclic Graph (DAG)
     dag = DAG()
 
@@ -84,24 +115,3 @@ if __name__ == '__main__':
 
     # Run Kahn's algorithm
     dag.kahn_algorithm()
-
-
-    def callback(ch, method, properties, body):
-        result_dict = json.loads(body)
-        print(f"Received result: {result_dict}")
-        ch.basic_ack(delivery_tag=method.delivery_tag)
-
-
-    # Setup RabbitMQ connection
-    connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
-    channel = connection.channel()
-
-    # Declare queue
-    channel.queue_declare(queue='result_queue', durable=True)
-
-    # Consume messages from queue
-    channel.basic_qos(prefetch_count=1)
-    channel.basic_consume(queue='result_queue', on_message_callback=callback)
-
-    print(' [*] Waiting for results. To exit press CTRL+C')
-    channel.start_consuming()
