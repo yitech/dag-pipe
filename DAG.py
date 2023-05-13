@@ -30,17 +30,8 @@ class DAG:
     def add_edge(self, start_node: BaseNode, end_node: BaseNode):
         start_node.add_neighbor(end_node)
 
-    def kahn_algorithm(self):
-        # Setup RabbitMQ connection and channel
-        connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
+    def kahn_algorithm(self, task_channel, result_channel):
 
-        # Declare task queue
-        task_queue = connection.channel()
-        task_queue.queue_declare(queue='task_queue', durable=True)
-
-        # Declare result queue
-        result_queue = connection.channel()
-        result_queue.queue_declare(queue='result_queue', durable=True)
 
         # List of nodes with no incoming edges
         zero_indegree = [node for node in self.nodes if node.indegree == 0]
@@ -63,16 +54,16 @@ class DAG:
                 neighbor.indegree -= 1
                 if neighbor.indegree == 0:
                     message = neighbor.name
-                    task_queue.basic_publish(exchange='',
-                                             routing_key='task_queue',
-                                             body=message,
-                                             properties=pika.BasicProperties(
-                                                 delivery_mode=2,  # make message persistent
-                                             ))
+                    task_channel.basic_publish(exchange='',
+                                               routing_key='task_queue',
+                                               body=message,
+                                               properties=pika.BasicProperties(
+                                                   delivery_mode=2,  # make message persistent
+                                               ))
         # Consume messages from queue
-        result_queue.basic_qos(prefetch_count=1)
-        result_queue.basic_consume(queue='result_queue', on_message_callback=callback)
-        result_queue.start_consuming()
+        result_channel.basic_qos(prefetch_count=1)
+        result_channel.basic_consume(queue='result_queue', on_message_callback=callback)
+        result_channel.start_consuming()
 
         # Close RabbitMQ connection
         connection.close()
@@ -113,5 +104,16 @@ if __name__ == '__main__':
     dag.add_edge(node2, node4)
     dag.add_edge(node3, node4)
 
+    # Setup RabbitMQ connection and channel
+    connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
+
+    # Declare task queue
+    task_queue = connection.channel()
+    task_queue.queue_declare(queue='task_queue', durable=True)
+
+    # Declare result queue
+    result_queue = connection.channel()
+    result_queue.queue_declare(queue='result_queue', durable=True)
+
     # Run Kahn's algorithm
-    dag.kahn_algorithm()
+    dag.kahn_algorithm(task_queue, result_queue)
