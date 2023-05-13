@@ -9,8 +9,9 @@ class TestNode(BaseNode):
 
     def __post_init__(self):
         # Setup RabbitMQ connection
-        self.connection = pika.BlockingConnection(pika.ConnectionParameters(host=self.name))
+        self.connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
         self.channel = self.connection.channel()
+        self.channel.queue_declare(queue='task_queue', durable=True)
 
     def callback(self, ch, method, properties, body):
         # Print self.name and wait len(self.name) seconds
@@ -55,3 +56,14 @@ class TestNode(BaseNode):
             self.connection.process_data_events()
             if self.name:
                 break
+
+
+def provider():
+    # Create a TestNode
+    test_node = TestNode('Node1')
+
+    # Run the TestNode
+    test_node.run()
+
+if __name__ == "__main__":
+    provider()
