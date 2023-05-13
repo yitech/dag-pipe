@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Dict, Type
-from node import BaseNode
+from client_node import BaseNode
+import networkx as nx
 
 
 @dataclass
